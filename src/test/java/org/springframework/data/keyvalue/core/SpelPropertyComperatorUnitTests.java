@@ -17,10 +17,16 @@ package org.springframework.data.keyvalue.core;
 
 import static org.assertj.core.api.Assertions.*;
 
+import java.util.Arrays;
 import java.util.Comparator;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
+import org.springframework.data.domain.Sort;
+import org.springframework.data.domain.Sort.Direction;
+import org.springframework.data.keyvalue.core.query.KeyValueQuery;
+import org.springframework.expression.spel.SpelEvaluationException;
 import org.springframework.expression.spel.standard.SpelExpressionParser;
 
 /**
@@ -115,6 +121,65 @@ class SpelPropertyComperatorUnitTests {
 
 		SpelPropertyComparator<WrapperType> comparator = new SpelPropertyComparator<>("nestedType.stringProperty", PARSER);
 		assertThat(comparator.compare(WRAPPER_ONE, new WrapperType("two", null))).isGreaterThanOrEqualTo(1);
+	}
+
+	@Test // CVE-2026-41719
+	void shouldRejectMethodInvocationInPath() {
+
+		Comparator<SomeType> comparator = new SpelPropertyComparator<>("stringProperty.toUpperCase()", PARSER);
+
+		assertThatExceptionOfType(SpelEvaluationException.class).isThrownBy(() -> comparator.compare(ONE, TWO));
+	}
+
+	@Test // CVE-2026-41719
+	void shouldRejectTypeReferenceInPath() {
+
+		Comparator<SomeType> comparator = new SpelPropertyComparator<>(
+				"stringProperty+T(Runtime).getRuntime().availableProcessors()", PARSER);
+
+		assertThatExceptionOfType(SpelEvaluationException.class).isThrownBy(() -> comparator.compare(ONE, TWO));
+	}
+
+	@Test // CVE-2026-41719
+	void shouldRejectConstructorInvocationInPath() {
+
+		Comparator<SomeType> comparator = new SpelPropertyComparator<>("stringProperty+new String('injected')", PARSER);
+
+		assertThatExceptionOfType(SpelEvaluationException.class).isThrownBy(() -> comparator.compare(ONE, TWO));
+	}
+
+	@Test // CVE-2026-41719
+	void shouldRejectAssignmentInPath() {
+
+		SomeType first = new SomeType("one", 1, 1);
+		SomeType second = new SomeType("two", 2, 2);
+
+		Comparator<SomeType> comparator = new SpelPropertyComparator<>("stringProperty='injected'", PARSER);
+
+		assertThatExceptionOfType(SpelEvaluationException.class).isThrownBy(() -> comparator.compare(first, second));
+		assertThat(first.getStringProperty()).isEqualTo("one");
+		assertThat(second.getStringProperty()).isEqualTo("two");
+	}
+
+	@Test // CVE-2026-41719
+	void shouldRejectClassAccessInPath() {
+
+		Comparator<SomeType> comparator = new SpelPropertyComparator<>("class.name", PARSER);
+
+		assertThatExceptionOfType(SpelEvaluationException.class).isThrownBy(() -> comparator.compare(ONE, TWO));
+	}
+
+	@Test // CVE-2026-41719
+	@SuppressWarnings("unchecked")
+	void shouldRejectExpressionInjectionThroughSortAccessor() {
+
+		KeyValueQuery<?> query = new KeyValueQuery<>(
+				Sort.by(Direction.DESC, "stringProperty+T(Runtime).getRuntime().availableProcessors()"));
+		Comparator<SomeType> comparator = (Comparator<SomeType>) new SpelSortAccessor(PARSER).resolve(query);
+
+		List<SomeType> values = Arrays.asList(ONE, TWO);
+
+		assertThatExceptionOfType(SpelEvaluationException.class).isThrownBy(() -> values.sort(comparator));
 	}
 
 	public static class WrapperType {
